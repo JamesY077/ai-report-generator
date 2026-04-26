@@ -88,17 +88,57 @@ AI 配置
 
 ### 环境要求
 
-- Node.js 18 或更高版本
-- npm
+- Node.js 22 LTS 或更高版本
+- npm，安装 Node.js 时会一起安装
 - 一个兼容 OpenAI Chat Completions API 的模型服务
 
-### 安装依赖
+确认环境：
+
+```bash
+node -v
+npm -v
+```
+
+如果命令不存在，请先安装 Node.js：
+
+```text
+https://nodejs.org/
+```
+
+### 一键启动
+
+下载项目后，可以直接使用根目录下的启动脚本：
+
+| 操作系统 | 启动方式 |
+| --- | --- |
+| macOS | 双击 `start-macos.command` |
+| Windows | 双击 `start-windows.bat` |
+
+启动脚本会自动完成：
+
+- 检查 Node.js 和 npm 是否已安装
+- 如果没有 `node_modules`，自动安装项目依赖
+- 启动 Vite 开发服务
+- 自动打开浏览器
+
+macOS 如果提示没有执行权限，可以在终端进入项目目录后执行：
+
+```bash
+chmod +x start-macos.command
+./start-macos.command
+```
+
+Windows 如果双击后被安全软件拦截，可以右键 `start-windows.bat`，选择允许运行。
+
+### 手动启动
+
+#### 安装依赖
 
 ```bash
 npm install
 ```
 
-### 启动开发服务
+#### 启动开发服务
 
 ```bash
 npm run dev
@@ -112,17 +152,24 @@ http://localhost:5173/
 
 如果端口被占用，Vite 会自动切换到下一个可用端口。
 
-### 构建生产版本
+#### 构建生产版本
 
 ```bash
 npm run build
 ```
 
-### 本地预览构建结果
+#### 本地预览构建结果
 
 ```bash
 npm run preview
 ```
+
+### 常见启动问题
+
+- 如果端口 `5173` 被占用，Vite 会自动使用下一个可用端口。
+- 如果安装依赖很慢，可以切换到更适合你网络环境的 npm 镜像源。
+- 如果 AI 连接失败，请确认填写的模型服务支持浏览器跨域请求，也就是 CORS。
+- 用户填写的 API Key 只保存在当前浏览器本地的 `localStorage`，不会上传到本项目服务器。
 
 ## AI 接口说明
 
