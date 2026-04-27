@@ -80,9 +80,12 @@ function SectionCard({
   outline: OutlineNode[];
   onContentUpdate: (id: string, content: string) => void;
 }) {
+  const dispatch = useAppDispatch();
   const [refreshing, setRefreshing] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
   const [suggestion, setSuggestion] = useState('');
+  const [optimizeModel, setOptimizeModel] = useState('');
+  const [checkingModel, setCheckingModel] = useState(false);
   const [displayContent, setDisplayContent] = useState(content);
   const aiConfig = useAppSelector((s) => s.app.aiConfig);
   const flatList = flattenOutline(outline);
@@ -93,6 +96,41 @@ function SectionCard({
   useEffect(() => {
     setDisplayContent(content);
   }, [content]);
+
+  const getSectionOptimizeConfig = async (): Promise<AIConfig | null> => {
+    const model = optimizeModel.trim() || aiConfig.model;
+    const nextConfig: AIConfig = { ...aiConfig, model };
+
+    if (!optimizeModel.trim() || model === aiConfig.model) {
+      return nextConfig;
+    }
+
+    setCheckingModel(true);
+    try {
+      aiService.setConfig(nextConfig);
+      const ok = await aiService.testConnection();
+      if (!ok) {
+        message.error('模型验证失败，请检查模型名称、Base URL 和 API Key');
+        return null;
+      }
+      dispatch(setAIConfig(nextConfig));
+      message.success(`模型 ${model} 可用`);
+      return nextConfig;
+    } catch (e) {
+      message.error('模型验证失败：' + (e instanceof Error ? e.message : '未知错误'));
+      return null;
+    } finally {
+      setCheckingModel(false);
+    }
+  };
+
+  const handleCheckModel = async () => {
+    if (!optimizeModel.trim()) {
+      message.info(`未填写模型时将默认使用当前整体模型：${aiConfig.model}`);
+      return;
+    }
+    await getSectionOptimizeConfig();
+  };
 
   const handleCancelRefresh = () => {
     refreshAbortRef.current?.abort();
@@ -152,7 +190,12 @@ function SectionCard({
     const controller = new AbortController();
     optimizeAbortRef.current = controller;
     try {
-      aiService.setConfig(aiConfig);
+      const optimizeConfig = await getSectionOptimizeConfig();
+      if (!optimizeConfig) {
+        setDisplayContent(prevContent);
+        return;
+      }
+      aiService.setConfig(optimizeConfig);
       let newContent = '';
       await aiService.optimizeSection(
         node.title, prevContent, suggestion, theme,
@@ -239,6 +282,23 @@ function SectionCard({
         <Text style={{ fontSize: 12, color: '#888', display: 'block', marginBottom: 8 }}>
           💡 对本章节有修改建议？输入后点击优化
         </Text>
+        <Space.Compact style={{ width: '100%', marginBottom: 8 }}>
+          <Input
+            value={optimizeModel}
+            onChange={(e) => setOptimizeModel(e.target.value)}
+            placeholder={`本段优化模型，留空默认：${aiConfig.model}`}
+            size="small"
+            disabled={refreshing || optimizing || checkingModel}
+          />
+          <Button
+            size="small"
+            onClick={handleCheckModel}
+            loading={checkingModel}
+            disabled={refreshing || optimizing}
+          >
+            验证模型
+          </Button>
+        </Space.Compact>
         {optimizing ? (
           <Button danger block icon={<StopOutlined />} onClick={handleCancelOptimize}>
             取消优化
@@ -257,7 +317,7 @@ function SectionCard({
               type="primary"
               icon={<SendOutlined />}
               onClick={handleOptimize}
-              loading={optimizing}
+              loading={optimizing || checkingModel}
               disabled={refreshing}
               style={{ background: '#667eea', border: 'none', height: 'auto' }}
             >

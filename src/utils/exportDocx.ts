@@ -6,13 +6,18 @@ import {
   HeadingLevel,
   AlignmentType,
   PageBreak,
-  LevelFormat,
   convertInchesToTwip,
+  Footer,
+  PageNumber,
 } from 'docx';
 import { saveAs } from 'file-saver';
 import type { OutlineNode, Version } from '../types';
 
-const NUMBERING_REF = 'ordered-list';
+const FONT_SONG = { eastAsia: '宋体', ascii: 'Times New Roman', hAnsi: 'Times New Roman' };
+const FONT_HEI = { eastAsia: '黑体', ascii: 'Arial', hAnsi: 'Arial' };
+const BODY_SIZE = 24; // 小四，12pt
+const BODY_LINE = 360; // 1.5 倍行距
+const FIRST_LINE_INDENT = 480; // 约两个中文字符
 
 function flattenOutline(nodes: OutlineNode[]): OutlineNode[] {
   const result: OutlineNode[] = [];
@@ -35,17 +40,15 @@ function getHeadingLevel(level: number): typeof HeadingLevel[keyof typeof Headin
   }
 }
 
-function parseMarkdownToRuns(text: string): TextRun[] {
-  const runs: TextRun[] = [];
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  for (const part of parts) {
-    if (part.startsWith('**') && part.endsWith('**')) {
-      runs.push(new TextRun({ text: part.slice(2, -2), bold: true }));
-    } else if (part) {
-      runs.push(new TextRun({ text: part }));
-    }
-  }
-  return runs.length ? runs : [new TextRun({ text })];
+function cleanMarkdownText(text: string): string {
+  return text
+    .replace(/^#{1,6}\s+/g, '')
+    .replace(/^[-*•]\s+/g, '')
+    .replace(/^\d+\.\s+/g, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\|/g, ' ')
+    .trim();
 }
 
 function contentToParagraphs(content: string): Paragraph[] {
@@ -55,62 +58,64 @@ function contentToParagraphs(content: string): Paragraph[] {
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) {
-      paragraphs.push(new Paragraph({ text: '' }));
+      paragraphs.push(new Paragraph({
+        text: '',
+        spacing: { line: BODY_LINE, before: 0, after: 0 },
+      }));
       continue;
     }
 
-    // Markdown heading lines inside content (### or ##) → bold paragraph
-    if (trimmed.startsWith('### ')) {
-      paragraphs.push(
-        new Paragraph({
-          children: [new TextRun({ text: trimmed.slice(4), bold: true, size: 26 })],
-          spacing: { before: 200, after: 100, line: 360 },
-        })
-      );
-    } else if (trimmed.startsWith('## ')) {
-      paragraphs.push(
-        new Paragraph({
-          children: [new TextRun({ text: trimmed.slice(3), bold: true, size: 28 })],
-          spacing: { before: 240, after: 120, line: 360 },
-        })
-      );
-    } else if (trimmed.startsWith('# ')) {
-      paragraphs.push(
-        new Paragraph({
-          children: [new TextRun({ text: trimmed.slice(2), bold: true, size: 30 })],
-          spacing: { before: 280, after: 140, line: 360 },
-        })
-      );
-    } else if (trimmed.startsWith('- ') || trimmed.startsWith('• ') || trimmed.startsWith('* ')) {
-      // Unordered list
-      paragraphs.push(
-        new Paragraph({
-          children: parseMarkdownToRuns(trimmed.slice(2)),
-          bullet: { level: 0 },
-          spacing: { line: 360 },
-        })
-      );
-    } else if (/^\d+\.\s/.test(trimmed)) {
-      // Ordered list → use numbering reference defined in Document
-      paragraphs.push(
-        new Paragraph({
-          children: parseMarkdownToRuns(trimmed.replace(/^\d+\.\s/, '')),
-          numbering: { reference: NUMBERING_REF, level: 0 },
-          spacing: { line: 360 },
-        })
-      );
-    } else {
-      paragraphs.push(
-        new Paragraph({
-          children: parseMarkdownToRuns(trimmed),
-          alignment: AlignmentType.JUSTIFIED,
-          spacing: { line: 360, before: 80, after: 80 },
-        })
-      );
-    }
+    const plainText = cleanMarkdownText(trimmed);
+    if (!plainText) continue;
+
+    paragraphs.push(
+      new Paragraph({
+        children: [new TextRun({ text: plainText, font: FONT_SONG, size: BODY_SIZE })],
+        alignment: AlignmentType.JUSTIFIED,
+        indent: { firstLine: FIRST_LINE_INDENT },
+        spacing: { line: BODY_LINE, before: 0, after: 120 },
+      })
+    );
   }
 
   return paragraphs;
+}
+
+function createHeadingParagraph(node: OutlineNode): Paragraph {
+  const levelStyles: Record<number, { size: number; before: number; after: number }> = {
+    1: { size: 32, before: 480, after: 240 },
+    2: { size: 30, before: 360, after: 200 },
+    3: { size: 28, before: 280, after: 160 },
+  };
+  const style = levelStyles[node.level] ?? levelStyles[3];
+
+  return new Paragraph({
+    children: [new TextRun({
+      text: node.title,
+      bold: true,
+      font: FONT_HEI,
+      size: style.size,
+    })],
+    heading: getHeadingLevel(node.level),
+    alignment: node.level === 1 ? AlignmentType.CENTER : AlignmentType.LEFT,
+    spacing: { before: style.before, after: style.after, line: BODY_LINE },
+    pageBreakBefore: node.level === 1,
+  });
+}
+
+function createFooter(): Footer {
+  return new Footer({
+    children: [
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [
+          new TextRun({ text: '第 ', font: FONT_SONG, size: 20 }),
+          new TextRun({ children: [PageNumber.CURRENT], font: FONT_SONG, size: 20 }),
+          new TextRun({ text: ' 页', font: FONT_SONG, size: 20 }),
+        ],
+      }),
+    ],
+  });
 }
 
 export async function exportToDocx(
@@ -125,10 +130,15 @@ export async function exportToDocx(
   // 封面标题
   children.push(
     new Paragraph({
-      text: theme,
+      children: [new TextRun({
+        text: theme,
+        bold: true,
+        font: FONT_HEI,
+        size: 44,
+      })],
       heading: HeadingLevel.TITLE,
       alignment: AlignmentType.CENTER,
-      spacing: { before: 2000, after: 400 },
+      spacing: { before: 2200, after: 480, line: BODY_LINE },
     })
   );
 
@@ -138,11 +148,12 @@ export async function exportToDocx(
         new TextRun({
           text: `版本 ${versionNum}  |  字数：${version.wordCount.toLocaleString()} 字`,
           color: '888888',
+          font: FONT_SONG,
           size: 22,
         }),
       ],
       alignment: AlignmentType.CENTER,
-      spacing: { after: 2000 },
+      spacing: { after: 2200, line: BODY_LINE },
     })
   );
 
@@ -152,10 +163,15 @@ export async function exportToDocx(
   // 目录标题
   children.push(
     new Paragraph({
-      text: '目  录',
+      children: [new TextRun({
+        text: '目  录',
+        bold: true,
+        font: FONT_HEI,
+        size: 32,
+      })],
       heading: HeadingLevel.HEADING_1,
       alignment: AlignmentType.CENTER,
-      spacing: { before: 400, after: 400 },
+      spacing: { before: 400, after: 400, line: BODY_LINE },
     })
   );
 
@@ -168,6 +184,7 @@ export async function exportToDocx(
           new TextRun({
             text: node.title,
             bold: node.level === 1,
+            font: node.level === 1 ? FONT_HEI : FONT_SONG,
             size: node.level === 1 ? 24 : 22,
           }),
         ],
@@ -182,14 +199,7 @@ export async function exportToDocx(
 
   // 正文内容
   for (const node of flatList) {
-    children.push(
-      new Paragraph({
-        text: node.title,
-        heading: getHeadingLevel(node.level),
-        spacing: { before: node.level === 1 ? 600 : 300, after: 200 },
-        pageBreakBefore: node.level === 1,
-      })
-    );
+    children.push(createHeadingParagraph(node));
 
     const content = version.content[node.id] || '';
     if (content) {
@@ -199,32 +209,28 @@ export async function exportToDocx(
   }
 
   const doc = new Document({
-    numbering: {
-      config: [
-        {
-          reference: NUMBERING_REF,
-          levels: [
-            {
-              level: 0,
-              format: LevelFormat.DECIMAL,
-              text: '%1.',
-              alignment: AlignmentType.LEFT,
-              style: {
-                paragraph: {
-                  indent: {
-                    left: convertInchesToTwip(0.5),
-                    hanging: convertInchesToTwip(0.25),
-                  },
-                },
-              },
-            },
-          ],
-        },
-      ],
-    },
     sections: [
       {
-        properties: {},
+        properties: {
+          page: {
+            size: {
+              width: 11906,
+              height: 16838,
+            },
+            margin: {
+              top: convertInchesToTwip(1),
+              bottom: convertInchesToTwip(1),
+              left: convertInchesToTwip(1.25),
+              right: convertInchesToTwip(1.25),
+              header: convertInchesToTwip(0.5),
+              footer: convertInchesToTwip(0.5),
+              gutter: 0,
+            },
+          },
+        },
+        footers: {
+          default: createFooter(),
+        },
         children,
       },
     ],
@@ -232,11 +238,53 @@ export async function exportToDocx(
       default: {
         document: {
           run: {
-            font: '宋体',
-            size: 24,
+            font: FONT_SONG,
+            size: BODY_SIZE,
           },
           paragraph: {
-            spacing: { line: 360 },
+            spacing: { line: BODY_LINE },
+          },
+        },
+        title: {
+          run: {
+            font: FONT_HEI,
+            size: 44,
+            bold: true,
+          },
+          paragraph: {
+            alignment: AlignmentType.CENTER,
+            spacing: { line: BODY_LINE },
+          },
+        },
+        heading1: {
+          run: {
+            font: FONT_HEI,
+            size: 32,
+            bold: true,
+          },
+          paragraph: {
+            alignment: AlignmentType.CENTER,
+            spacing: { before: 480, after: 240, line: BODY_LINE },
+          },
+        },
+        heading2: {
+          run: {
+            font: FONT_HEI,
+            size: 30,
+            bold: true,
+          },
+          paragraph: {
+            spacing: { before: 360, after: 200, line: BODY_LINE },
+          },
+        },
+        heading3: {
+          run: {
+            font: FONT_HEI,
+            size: 28,
+            bold: true,
+          },
+          paragraph: {
+            spacing: { before: 280, after: 160, line: BODY_LINE },
           },
         },
       },
