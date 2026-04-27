@@ -1,16 +1,17 @@
 import { useState, useRef } from 'react';
 import {
-  Button, InputNumber, Typography, Progress, Space, Card, message, Slider
+  Button, Input, InputNumber, Typography, Progress, Space, Card, message, Slider
 } from 'antd';
 import { FileTextOutlined, ThunderboltOutlined, LoadingOutlined, StopOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import { useAppDispatch, useAppSelector } from '../hooks/useAppDispatch';
-import { setStage, setGenerationProgress } from '../store/appSlice';
+import { setStage, setGenerationProgress, setAIConfig } from '../store/appSlice';
 import { addVersion, setWordCountTarget } from '../store/projectSlice';
 import { aiService } from '../services/aiService';
 import { flattenOutline } from '../services/aiService';
+import type { AIConfig } from '../types';
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text, Paragraph, Link } = Typography;
 
 export default function DraftPage() {
   const dispatch = useAppDispatch();
@@ -22,6 +23,8 @@ export default function DraftPage() {
 
   const [wordCount, setWordCount] = useState(wordCountTarget);
   const [generating, setGenerating] = useState(false);
+  const [generationModel, setGenerationModel] = useState(aiConfig.model);
+  const [checkingModel, setCheckingModel] = useState(false);
   // 当前章节实时流式内容
   const [currentSectionContent, setCurrentSectionContent] = useState('');
   const contentRef = useRef<Record<string, string>>({});
@@ -30,6 +33,34 @@ export default function DraftPage() {
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const flatList = flattenOutline(outline);
+  const leafCount = Math.max(flatList.filter((node) => !node.children?.length).length, 1);
+
+  const validateGenerationModel = async (): Promise<AIConfig | null> => {
+    const model = generationModel.trim();
+    if (!model) {
+      message.warning('请输入本次生成要使用的模型名称');
+      return null;
+    }
+
+    const nextConfig: AIConfig = { ...aiConfig, model };
+    setCheckingModel(true);
+    try {
+      aiService.setConfig(nextConfig);
+      const ok = await aiService.testConnection();
+      if (!ok) {
+        message.error('模型验证失败，请检查模型名称、Base URL 和 API Key');
+        return null;
+      }
+      dispatch(setAIConfig(nextConfig));
+      message.success(`模型 ${model} 可用`);
+      return nextConfig;
+    } catch (e) {
+      message.error('模型验证失败：' + (e instanceof Error ? e.message : '未知错误'));
+      return null;
+    } finally {
+      setCheckingModel(false);
+    }
+  };
 
   const handleCancel = () => {
     if (abortControllerRef.current) {
@@ -44,6 +75,9 @@ export default function DraftPage() {
 
   const handleGenerate = async () => {
     if (!projectInfo) return;
+    const generationConfig = await validateGenerationModel();
+    if (!generationConfig) return;
+
     setGenerating(true);
     dispatch(setWordCountTarget(wordCount));
     contentRef.current = {};
@@ -60,7 +94,7 @@ export default function DraftPage() {
     }));
 
     try {
-      aiService.setConfig(aiConfig);
+      aiService.setConfig(generationConfig);
 
       for (let i = 0; i < flatList.length; i++) {
         // 每章节前检查取消
@@ -158,6 +192,13 @@ export default function DraftPage() {
             <Paragraph style={{ color: '#888', marginTop: 8 }}>
               AI 将根据大纲逐章节生成完整内容
             </Paragraph>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              欢迎前往{' '}
+              <Link href="https://www.aiping.cn/modelList" target="_blank" rel="noreferrer">
+                https://www.aiping.cn/modelList
+              </Link>
+              {' '}自行选择想要使用的模型
+            </Text>
           </div>
 
           {/* 大纲预览 */}
@@ -182,6 +223,35 @@ export default function DraftPage() {
               ))}
             </div>
           </Card>
+
+          {/* 模型设置 */}
+          <div style={{
+            marginBottom: 24,
+            padding: '14px 16px',
+            border: '1px solid #e8e8e8',
+            borderRadius: 10,
+            background: '#fff',
+          }}>
+            <Text strong>本次生成模型</Text>
+            <Space.Compact style={{ width: '100%', marginTop: 10 }}>
+              <Input
+                value={generationModel}
+                onChange={(e) => setGenerationModel(e.target.value)}
+                placeholder="例如：gpt-4o"
+                disabled={generating || checkingModel}
+              />
+              <Button
+                onClick={validateGenerationModel}
+                loading={checkingModel}
+                disabled={generating}
+              >
+                验证模型
+              </Button>
+            </Space.Compact>
+            <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+              点击开始生成前会自动验证该模型是否可用，验证通过后会保存为当前模型配置。
+            </Text>
+          </div>
 
           {/* 字数设置 */}
           <div style={{ marginBottom: 24 }}>
@@ -214,7 +284,7 @@ export default function DraftPage() {
               />
             </div>
             <Text style={{ color: '#888', fontSize: 12 }}>
-              预计每章节约 {Math.floor(wordCount / Math.max(flatList.length, 1))} 字
+              叶子章节预计每节约 {Math.floor(wordCount / leafCount)} 字，一级/非叶子章节只生成概述
             </Text>
           </div>
 

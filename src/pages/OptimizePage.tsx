@@ -11,13 +11,13 @@ import {
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import { useAppDispatch, useAppSelector } from '../hooks/useAppDispatch';
-import { setStage, setActiveSection, setLeftPanelCollapsed } from '../store/appSlice';
+import { setStage, setActiveSection, setLeftPanelCollapsed, setAIConfig } from '../store/appSlice';
 import { updateVersionContent, addVersion, setCurrentVersion } from '../store/projectSlice';
 import { aiService } from '../services/aiService';
 import { flattenOutline } from '../services/aiService';
 import type { OutlineNode, AIConfig, Version } from '../types';
 
-const { Text } = Typography;
+const { Text, Link } = Typography;
 const { TextArea } = Input;
 
 // ─────────────────────────────────────────────
@@ -481,13 +481,16 @@ function IterateComparePage({
           setProgress({ completed: i, total: flatList.length });
 
           const current = currentContent[section.id] || '';
-          await aiService.iterateVersion(
+          let sectionContent = '';
+          await aiService.iterateSectionContent(
+            section,
             projectTheme,
-            [section],
-            { [section.id]: current },
+            outline,
+            current,
             iterateRequirements,
-            (_id, content) => {
-              setNewContent((prev) => ({ ...prev, [section.id]: content }));
+            (chunk) => {
+              sectionContent += chunk;
+              setNewContent((prev) => ({ ...prev, [section.id]: sectionContent }));
             },
             controller.signal
           );
@@ -1003,6 +1006,9 @@ export default function OptimizePage() {
   const userPreferences = useAppSelector((s) => s.app.userPreferences);
 
   const [iterateInput, setIterateInput] = useState('');
+  const [iterateModel, setIterateModel] = useState(aiConfig.model);
+  const [checkingIterateModel, setCheckingIterateModel] = useState(false);
+  const [compareAIConfig, setCompareAIConfig] = useState<AIConfig | null>(null);
   const [showIterateModal, setShowIterateModal] = useState(false);
   const [showComparePage, setShowComparePage] = useState(false);
   const [pendingRequirements, setPendingRequirements] = useState('');
@@ -1032,14 +1038,46 @@ export default function OptimizePage() {
 
   const handleOpenIterate = () => {
     setIterateInput('');
+    setIterateModel(aiConfig.model);
     setShowIterateModal(true);
   };
 
-  const handleStartIterate = () => {
+  const validateIterateModel = async (): Promise<AIConfig | null> => {
+    const model = iterateModel.trim();
+    if (!model) {
+      message.warning('请输入本次迭代要使用的模型名称');
+      return null;
+    }
+
+    const nextConfig: AIConfig = { ...aiConfig, model };
+    setCheckingIterateModel(true);
+    try {
+      aiService.setConfig(nextConfig);
+      const ok = await aiService.testConnection();
+      if (!ok) {
+        message.error('模型验证失败，请检查模型名称、Base URL 和 API Key');
+        return null;
+      }
+      dispatch(setAIConfig(nextConfig));
+      message.success(`模型 ${model} 可用`);
+      return nextConfig;
+    } catch (e) {
+      message.error('模型验证失败：' + (e instanceof Error ? e.message : '未知错误'));
+      return null;
+    } finally {
+      setCheckingIterateModel(false);
+    }
+  };
+
+  const handleStartIterate = async () => {
     if (!iterateInput.trim()) {
       message.warning('请输入优化要求');
       return;
     }
+    const nextConfig = await validateIterateModel();
+    if (!nextConfig) return;
+
+    setCompareAIConfig(nextConfig);
     setPendingRequirements(iterateInput);
     setShowIterateModal(false);
     setShowComparePage(true);
@@ -1064,12 +1102,14 @@ export default function OptimizePage() {
       wordCount: totalWords,
     }));
     setShowComparePage(false);
+    setCompareAIConfig(null);
     setPendingRequirements('');
     message.success(`✅ 版本 V${newVersion} 已创建，已应用 ${selectedIds.size} 个章节！`);
   };
 
   const handleIterateCancel = () => {
     setShowComparePage(false);
+    setCompareAIConfig(null);
     setPendingRequirements('');
   };
 
@@ -1105,7 +1145,7 @@ export default function OptimizePage() {
         currentVersion={currentVersion}
         currentContent={currentVersionData.content}
         iterateRequirements={pendingRequirements}
-        aiConfig={aiConfig}
+        aiConfig={compareAIConfig ?? aiConfig}
         onComplete={handleIterateComplete}
         onCancel={handleIterateCancel}
       />
@@ -1176,6 +1216,13 @@ export default function OptimizePage() {
             )}
             <Text strong>{projectInfo?.theme}</Text>
             <Tag color="purple">版本 {currentVersion}</Tag>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              欢迎前往{' '}
+              <Link href="https://www.aiping.cn/modelList" target="_blank" rel="noreferrer">
+                模型列表
+              </Link>
+              {' '}自行选择想要使用的模型
+            </Text>
             <Text style={{ color: '#888', fontSize: 12 }}>
               {currentVersionData.wordCount.toLocaleString()} 字
             </Text>
@@ -1257,6 +1304,23 @@ export default function OptimizePage() {
             💡 生成完成后，您可以在左右对比视图中勾选要应用的章节，未勾选的章节将保留当前版本内容。
             （当前版本 V{currentVersion}，最多支持 {userPreferences.maxIterations} 个版本）
           </Text>
+          <div style={{ marginBottom: 16 }}>
+            <Text strong style={{ display: 'block', marginBottom: 8 }}>本次迭代模型</Text>
+            <Space.Compact style={{ width: '100%' }}>
+              <Input
+                value={iterateModel}
+                onChange={(e) => setIterateModel(e.target.value)}
+                placeholder="例如：gpt-4o"
+                disabled={checkingIterateModel}
+              />
+              <Button onClick={validateIterateModel} loading={checkingIterateModel}>
+                验证模型
+              </Button>
+            </Space.Compact>
+            <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+              点击开始生成前会自动验证该模型是否可用，验证通过后会保存为当前模型配置。
+            </Text>
+          </div>
           <TextArea
             value={iterateInput}
             onChange={(e) => setIterateInput(e.target.value)}
@@ -1271,6 +1335,7 @@ export default function OptimizePage() {
               type="primary"
               onClick={handleStartIterate}
               icon={<RightOutlined />}
+              loading={checkingIterateModel}
               style={{ background: 'linear-gradient(135deg, #667eea, #764ba2)', border: 'none' }}
             >
               开始生成并对比

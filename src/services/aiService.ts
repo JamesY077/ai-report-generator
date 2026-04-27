@@ -68,6 +68,35 @@ function outlineToText(nodes: OutlineNode[], indent = 0): string {
     .join('\n');
 }
 
+function getChildTitles(node: OutlineNode | undefined): string {
+  if (!node?.children?.length) return '无';
+  return node.children.map((child) => `- ${child.title}`).join('\n');
+}
+
+function getSectionRoleInstruction(node: OutlineNode | undefined, targetWordCount: number, leafCount: number): {
+  role: string;
+  wordCount: number;
+  instruction: string;
+} {
+  if (node?.children?.length) {
+    const wordCount = node.level === 1 ? 300 : 220;
+    return {
+      role: '概述章节',
+      wordCount,
+      instruction: `当前章节是非叶子章节，下级章节包括：
+${getChildTitles(node)}
+
+请只撰写本章节的整体概括、背景引入、逻辑铺垫和承上启下内容。不要展开下级章节的具体论证，不要提前生成下级章节正文，不要罗列下级章节的完整内容，避免与后续章节重复。`,
+    };
+  }
+
+  return {
+    role: '正文详述章节',
+    wordCount: Math.floor(targetWordCount / Math.max(leafCount, 1)),
+    instruction: '当前章节是叶子章节，请围绕该章节标题展开完整、细致、可直接用于报告正文的分析论述。',
+  };
+}
+
 function cleanJsonText(text: string): string {
   return text
     .replace(/^\s*```(?:json)?\s*/i, '')
@@ -422,10 +451,7 @@ ${outlineText}
     const leafSections = flatList.filter((n) => !n.children?.length);
     const leafCount = Math.max(leafSections.length, 1);
     const currentNode = flatList.find((n) => n.title === sectionTitle);
-    const isLeaf = !currentNode?.children?.length;
-    const wordsPerSection = isLeaf
-      ? Math.floor(targetWordCount / leafCount)
-      : Math.floor(targetWordCount / Math.max(flatList.length, 1));
+    const sectionProfile = getSectionRoleInstruction(currentNode, targetWordCount, leafCount);
 
     const prompt = `你是一位专业的报告撰写专家。请严格按照以下要求，为指定章节撰写详细的正文内容。
 
@@ -436,15 +462,21 @@ ${outlineText}
 
 【当前撰写章节】${sectionTitle}
 
-【字数要求】本章节需撰写约 ${wordsPerSection} 字的正文内容，请务必达到该字数要求，内容要充实、详尽。
+【章节类型】${sectionProfile.role}
+
+【章节处理规则】
+${sectionProfile.instruction}
+
+【字数要求】本章节需撰写约 ${sectionProfile.wordCount} 字。
 
 【撰写要求】
 1. 本章节内容必须紧扣章节标题"${sectionTitle}"，围绕该章节的具体主题展开，不得写成通用结论或摘要
-2. 内容专业、详实，包含具体的分析、论述、数据或案例
-3. 语言流畅，逻辑清晰，段落结构合理
+2. 内容专业、严谨，符合标准论文或正式研究报告的正文表达
+3. 语言流畅，逻辑清晰，段落结构合理，避免口语化
 4. 直接输出正文内容，不要重复章节标题
-5. 使用Markdown格式（**加粗**、列表、小标题等）增强可读性
+5. 禁止使用 Markdown 格式，禁止出现 #、**加粗**、项目符号列表、表格、代码块等格式标记
 6. 禁止生成与其他章节重复的内容，本章节有其独特的论述角度
+7. 请使用普通段落输出，段落之间可以换行，但不要添加额外小标题
 
 请直接开始撰写"${sectionTitle}"的正文内容：`;
 
@@ -455,25 +487,33 @@ ${outlineText}
   async refreshSection(
     sectionTitle: string,
     theme: string,
-    _outline: OutlineNode[],
+    outline: OutlineNode[],
     prevContent: string,
     nextContent: string,
     onChunk: (chunk: string) => void,
     signal?: AbortSignal
   ): Promise<string> {
+    const flatList = flattenOutline(outline);
+    const currentNode = flatList.find((n) => n.title === sectionTitle);
+    const leafSections = flatList.filter((n) => !n.children?.length);
+    const sectionProfile = getSectionRoleInstruction(currentNode, 15000, Math.max(leafSections.length, 1));
     const prompt = `你是一位专业的报告撰写专家。请重新撰写以下章节的内容。
 
 报告主题：${theme}
 章节标题：${sectionTitle}
+章节类型：${sectionProfile.role}
+章节处理规则：
+${sectionProfile.instruction}
 ${prevContent ? `上一章节内容摘要：${prevContent.slice(0, 200)}...` : ''}
 ${nextContent ? `下一章节内容摘要：${nextContent.slice(0, 200)}...` : ''}
 
 要求：
 1. 内容与主题和标题高度相关
 2. 与前后章节保持连贯
-3. 语言专业、详实
+3. 语言专业、严谨，符合标准论文或正式研究报告的正文表达
 4. 直接输出内容，不要重复标题
-5. 使用Markdown格式增强可读性`;
+5. 禁止使用 Markdown 格式，禁止出现 #、**加粗**、项目符号列表、表格、代码块等格式标记
+6. 使用普通段落输出，不要添加额外小标题`;
 
     return this.streamChatCompletion(prompt, onChunk, 0.8, signal);
   }
@@ -496,7 +536,49 @@ ${currentContent}
 
 用户建议：${userSuggestion}
 
-请根据建议重新撰写该章节，保持与主题的相关性，直接输出优化后的内容。`;
+请根据建议重新撰写该章节，保持与主题的相关性，直接输出优化后的内容。
+要求：语言专业、严谨，符合标准论文或正式研究报告的正文表达。禁止使用 Markdown 格式，禁止出现 #、**加粗**、项目符号列表、表格、代码块等格式标记。使用普通段落输出，不要添加额外小标题。`;
+
+    return this.streamChatCompletion(prompt, onChunk, 0.7, signal);
+  }
+
+  /** 根据整体要求迭代单个章节，避免父章节重复生成子章节内容 */
+  async iterateSectionContent(
+    section: OutlineNode,
+    theme: string,
+    outline: OutlineNode[],
+    currentContent: string,
+    newRequirements: string,
+    onChunk: (chunk: string) => void,
+    signal?: AbortSignal
+  ): Promise<string> {
+    const flatList = flattenOutline(outline);
+    const leafSections = flatList.filter((n) => !n.children?.length);
+    const sectionProfile = getSectionRoleInstruction(section, 15000, Math.max(leafSections.length, 1));
+    const prompt = `你是一位专业的报告撰写专家。请根据新的整体要求，优化以下单个章节内容。
+
+【报告主题】${theme}
+
+【当前章节】${section.title}
+
+【章节类型】${sectionProfile.role}
+
+【章节处理规则】
+${sectionProfile.instruction}
+
+【当前章节内容】
+${currentContent}
+
+【整体优化要求】
+${newRequirements}
+
+【输出要求】
+1. 只输出当前章节"${section.title}"的优化后正文，不要输出其他章节内容
+2. 如果当前章节是非叶子章节，只写整体概括、逻辑铺垫和承上启下，不要展开下级章节正文
+3. 如果当前章节是叶子章节，请完整展开该章节的具体分析
+4. 语言专业、严谨，符合标准论文或正式研究报告的正文表达
+5. 禁止使用 Markdown 格式，禁止出现 #、**加粗**、项目符号列表、表格、代码块等格式标记
+6. 使用普通段落输出，不要重复章节标题，不要添加额外小标题`;
 
     return this.streamChatCompletion(prompt, onChunk, 0.7, signal);
   }
