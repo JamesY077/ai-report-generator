@@ -3,14 +3,20 @@ import {
   Button, Card, Typography, Space, Select, Tag, Descriptions, message, List
 } from 'antd';
 import {
-  DownloadOutlined, FileWordOutlined, HistoryOutlined, ArrowLeftOutlined
+  DownloadOutlined, FileWordOutlined, HistoryOutlined, ArrowLeftOutlined, LinkOutlined
 } from '@ant-design/icons';
 import { useAppDispatch, useAppSelector } from '../hooks/useAppDispatch';
 import type { Version } from '../types';
 import { setStage } from '../store/appSlice';
 import { exportToDocx } from '../utils/exportDocx';
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text, Paragraph, Link } = Typography;
+
+const FRIENDLY_LINKS = [
+  { name: '中国知网', url: 'https://www.cnki.net' },
+  { name: 'Paperpass', url: 'https://www.paperpass.com/?utm_source=baidufengchao&utm_medium=2026bdt-chachong&utm_term=chachong' },
+  { name: '维普查重', url: 'https://www.weipuchachong.cn/wpfd/' },
+];
 
 export default function ExportPage() {
   const dispatch = useAppDispatch();
@@ -208,6 +214,28 @@ export default function ExportPage() {
               返回继续编辑
             </Button>
           </Space>
+
+          <div style={{
+            marginTop: 20,
+            paddingTop: 16,
+            borderTop: '1px solid #f0f0f0',
+          }}>
+            <Text strong style={{ display: 'block', marginBottom: 10 }}>友情链接</Text>
+            <Space wrap size={[16, 8]}>
+              {FRIENDLY_LINKS.map((item) => (
+                <Link
+                  key={item.name}
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                >
+                  <LinkOutlined />
+                  {item.name}
+                </Link>
+              ))}
+            </Space>
+          </div>
         </Card>
       </div>
     </div>
